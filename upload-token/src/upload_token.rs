@@ -414,20 +414,20 @@ impl<C: CredentialProvider + Clone> UploadTokenProvider for FromUploadPolicy<C> 
     }
 }
 
-type OnPolicyGeneratedCallback = Arc<dyn Fn(&mut UploadPolicyBuilder) + Sync + Send + 'static>;
+type OnPolicyGeneratedCallback<'a> = Arc<dyn Fn(&mut UploadPolicyBuilder) + Sync + Send + 'a>;
 
 /// 基于存储空间的动态生成
 ///
 /// 根据存储空间的快速生成上传凭证实例
 #[derive(Clone)]
-pub struct BucketUploadTokenProvider<C: Clone> {
+pub struct BucketUploadTokenProvider<'a, C: Clone + 'a> {
     bucket: BucketName,
     upload_token_lifetime: Duration,
     credential: C,
-    on_policy_generated: Option<OnPolicyGeneratedCallback>,
+    on_policy_generated: Option<OnPolicyGeneratedCallback<'a>>,
 }
 
-impl<C: Clone> BucketUploadTokenProvider<C> {
+impl<'a, C: Clone + 'a> BucketUploadTokenProvider<'a, C> {
     /// 基于存储空间和认证信息动态生成上传凭证实例
     #[inline]
     pub fn new(bucket: impl Into<BucketName>, upload_token_lifetime: Duration, credential: C) -> Self {
@@ -440,15 +440,13 @@ impl<C: Clone> BucketUploadTokenProvider<C> {
         bucket: impl Into<BucketName>,
         upload_token_lifetime: Duration,
         credential: C,
-    ) -> BucketUploadTokenProviderBuilder<C> {
-        BucketUploadTokenProviderBuilder {
-            inner: Self {
-                bucket: bucket.into(),
-                upload_token_lifetime,
-                credential,
-                on_policy_generated: None,
-            },
-        }
+    ) -> BucketUploadTokenProviderBuilder<'a, C> {
+        BucketUploadTokenProviderBuilder(Self {
+            bucket: bucket.into(),
+            upload_token_lifetime,
+            credential,
+            on_policy_generated: None,
+        })
     }
 
     fn make_policy(&self) -> UploadPolicy {
@@ -462,7 +460,7 @@ impl<C: Clone> BucketUploadTokenProvider<C> {
     }
 }
 
-impl<C: Clone> Debug for BucketUploadTokenProvider<C> {
+impl<'a, C: Clone + 'a> Debug for BucketUploadTokenProvider<'a, C> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("BucketUploadTokenProvider")
@@ -472,7 +470,7 @@ impl<C: Clone> Debug for BucketUploadTokenProvider<C> {
     }
 }
 
-impl<C: CredentialProvider + Clone> UploadTokenProvider for BucketUploadTokenProvider<C> {
+impl<'a, C: CredentialProvider + Clone + 'a> UploadTokenProvider for BucketUploadTokenProvider<'a, C> {
     #[inline]
     fn access_key(&self, _opts: GetAccessKeyOptions) -> ParseResult<GotAccessKey> {
         Ok(self
@@ -499,32 +497,30 @@ impl<C: CredentialProvider + Clone> UploadTokenProvider for BucketUploadTokenPro
 
 /// 存储空间上传凭证构建器
 #[derive(Clone)]
-pub struct BucketUploadTokenProviderBuilder<C: Clone> {
-    inner: BucketUploadTokenProvider<C>,
-}
+pub struct BucketUploadTokenProviderBuilder<'a, C: Clone>(BucketUploadTokenProvider<'a, C>);
 
-impl<C: Clone> BucketUploadTokenProviderBuilder<C> {
+impl<'a, C: Clone + 'a> BucketUploadTokenProviderBuilder<'a, C> {
     /// 设置上传凭证回调函数
     #[inline]
     #[must_use]
-    pub fn on_policy_generated(mut self, callback: impl Fn(&mut UploadPolicyBuilder) + Sync + Send + 'static) -> Self {
-        self.inner.on_policy_generated = Some(Arc::new(callback));
+    pub fn on_policy_generated(mut self, callback: impl Fn(&mut UploadPolicyBuilder) + Sync + Send + 'a) -> Self {
+        self.0.on_policy_generated = Some(Arc::new(callback));
         self
     }
 
     /// 构造存储空间上传凭证
     #[inline]
-    pub fn build(self) -> BucketUploadTokenProvider<C> {
-        self.inner
+    pub fn build(self) -> BucketUploadTokenProvider<'a, C> {
+        self.0
     }
 }
 
-impl<C: Clone> Debug for BucketUploadTokenProviderBuilder<C> {
+impl<'a, C: Clone + 'a> Debug for BucketUploadTokenProviderBuilder<'a, C> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("BucketUploadTokenProviderBuilder")
-            .field("bucket", &self.inner.bucket)
-            .field("upload_token_lifetime", &self.inner.upload_token_lifetime)
+            .field("bucket", &self.0.bucket)
+            .field("upload_token_lifetime", &self.0.upload_token_lifetime)
             .finish()
     }
 }
@@ -533,15 +529,15 @@ impl<C: Clone> Debug for BucketUploadTokenProviderBuilder<C> {
 ///
 /// 根据对象的快速生成上传凭证实例
 #[derive(Clone)]
-pub struct ObjectUploadTokenProvider<C: Clone> {
+pub struct ObjectUploadTokenProvider<'a, C: Clone + 'a> {
     bucket: BucketName,
     object: ObjectName,
     upload_token_lifetime: Duration,
     credential: C,
-    on_policy_generated: Option<OnPolicyGeneratedCallback>,
+    on_policy_generated: Option<OnPolicyGeneratedCallback<'a>>,
 }
 
-impl<C: Clone> ObjectUploadTokenProvider<C> {
+impl<'a, C: Clone + 'a> ObjectUploadTokenProvider<'a, C> {
     /// 基于存储空间和对象名称和认证信息动态生成上传凭证实例
     #[inline]
     pub fn new(
@@ -560,16 +556,14 @@ impl<C: Clone> ObjectUploadTokenProvider<C> {
         object: impl Into<ObjectName>,
         upload_token_lifetime: Duration,
         credential: C,
-    ) -> ObjectUploadTokenProviderBuilder<C> {
-        ObjectUploadTokenProviderBuilder {
-            inner: Self {
-                bucket: bucket.into(),
-                object: object.into(),
-                upload_token_lifetime,
-                credential,
-                on_policy_generated: None,
-            },
-        }
+    ) -> ObjectUploadTokenProviderBuilder<'a, C> {
+        ObjectUploadTokenProviderBuilder(Self {
+            bucket: bucket.into(),
+            object: object.into(),
+            upload_token_lifetime,
+            credential,
+            on_policy_generated: None,
+        })
     }
 
     fn make_policy(&self) -> UploadPolicy {
@@ -587,7 +581,7 @@ impl<C: Clone> ObjectUploadTokenProvider<C> {
     }
 }
 
-impl<C: Clone> Debug for ObjectUploadTokenProvider<C> {
+impl<'a, C: Clone + 'a> Debug for ObjectUploadTokenProvider<'a, C> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("ObjectUploadTokenProvider")
@@ -598,7 +592,7 @@ impl<C: Clone> Debug for ObjectUploadTokenProvider<C> {
     }
 }
 
-impl<C: CredentialProvider + Clone> UploadTokenProvider for ObjectUploadTokenProvider<C> {
+impl<'a, C: CredentialProvider + Clone + 'a> UploadTokenProvider for ObjectUploadTokenProvider<'a, C> {
     fn access_key(&self, _opts: GetAccessKeyOptions) -> ParseResult<GotAccessKey> {
         Ok(self
             .credential
@@ -624,33 +618,31 @@ impl<C: CredentialProvider + Clone> UploadTokenProvider for ObjectUploadTokenPro
 
 /// 对象上传凭证构建器
 #[derive(Clone)]
-pub struct ObjectUploadTokenProviderBuilder<C: Clone> {
-    inner: ObjectUploadTokenProvider<C>,
-}
+pub struct ObjectUploadTokenProviderBuilder<'a, C: Clone>(ObjectUploadTokenProvider<'a, C>);
 
-impl<C: Clone> ObjectUploadTokenProviderBuilder<C> {
+impl<'a, C: Clone + 'a> ObjectUploadTokenProviderBuilder<'a, C> {
     /// 设置上传凭证回调函数
     #[inline]
     #[must_use]
-    pub fn on_policy_generated(mut self, callback: impl Fn(&mut UploadPolicyBuilder) + Sync + Send + 'static) -> Self {
-        self.inner.on_policy_generated = Some(Arc::new(callback));
+    pub fn on_policy_generated(mut self, callback: impl Fn(&mut UploadPolicyBuilder) + Sync + Send + 'a) -> Self {
+        self.0.on_policy_generated = Some(Arc::new(callback));
         self
     }
 
     /// 构建对象上传凭证
     #[inline]
-    pub fn build(self) -> ObjectUploadTokenProvider<C> {
-        self.inner
+    pub fn build(self) -> ObjectUploadTokenProvider<'a, C> {
+        self.0
     }
 }
 
-impl<C: Clone> Debug for ObjectUploadTokenProviderBuilder<C> {
+impl<'a, C: Clone + 'a> Debug for ObjectUploadTokenProviderBuilder<'a, C> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("ObjectUploadTokenProviderBuilder")
-            .field("bucket", &self.inner.bucket)
-            .field("object", &self.inner.object)
-            .field("upload_token_lifetime", &self.inner.upload_token_lifetime)
+            .field("bucket", &self.0.bucket)
+            .field("object", &self.0.object)
+            .field("upload_token_lifetime", &self.0.upload_token_lifetime)
             .finish()
     }
 }
