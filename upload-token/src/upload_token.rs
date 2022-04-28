@@ -1,4 +1,5 @@
 use super::{UploadPolicy, UploadPolicyBuilder};
+use anyhow::{Error as AnyError, Result as AnyResult};
 use auto_impl::auto_impl;
 use dyn_clonable::clonable;
 use once_cell::sync::OnceCell;
@@ -8,13 +9,12 @@ use std::{
     borrow::Cow,
     convert::Infallible,
     fmt::{self, Debug, Display},
-    io::{Error as IoError, Result as IoResult},
+    io::Error as IoError,
     ops::{Deref, DerefMut},
     str::FromStr,
     sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
-use tap::Tap;
 use thiserror::Error;
 
 #[cfg(feature = "async")]
@@ -22,12 +22,6 @@ use {
     futures::lock::Mutex as AsyncMutex,
     std::{future::Future, pin::Pin},
 };
-
-#[cfg(feature = "async")]
-type AsyncParseResult<'a, T> = Pin<Box<dyn Future<Output = ParseResult<T>> + 'a + Send>>;
-
-#[cfg(feature = "async")]
-type AsyncIoResult<'a, T> = Pin<Box<dyn Future<Output = IoResult<T>> + 'a + Send>>;
 
 /// 上传凭证获取接口
 ///
@@ -64,13 +58,13 @@ pub trait UploadTokenProvider: Clone + Debug + Sync + Send {
     /// 生成字符串
     ///
     /// 该方法的异步版本为 [`Self::async_to_token_string`]。
-    fn to_token_string(&self, opts: ToStringOptions) -> IoResult<Cow<'_, str>>;
+    fn to_token_string(&self, opts: ToStringOptions) -> ToStringResult<Cow<'_, str>>;
 
     /// 异步生成字符串
     #[inline]
     #[cfg(feature = "async")]
     #[cfg_attr(feature = "docs", doc(cfg(feature = "async")))]
-    fn async_to_token_string(&self, opts: ToStringOptions) -> AsyncIoResult<'_, Cow<'_, str>> {
+    fn async_to_token_string(&self, opts: ToStringOptions) -> AsyncToStringResult<'_, Cow<'_, str>> {
         Box::pin(async move { self.to_token_string(opts) })
     }
 }
@@ -342,7 +336,7 @@ impl UploadTokenProvider for StaticUploadTokenProvider {
     }
 
     #[inline]
-    fn to_token_string(&self, _opts: ToStringOptions) -> IoResult<Cow<'_, str>> {
+    fn to_token_string(&self, _opts: ToStringOptions) -> ToStringResult<Cow<'_, str>> {
         Ok(Cow::Borrowed(self.upload_token.as_ref()))
     }
 }
@@ -405,7 +399,7 @@ impl<C: CredentialProvider + Clone> UploadTokenProvider for FromUploadPolicy<C> 
         Ok(Cow::Borrowed(&self.upload_policy).into())
     }
 
-    fn to_token_string(&self, _opts: ToStringOptions) -> IoResult<Cow<'_, str>> {
+    fn to_token_string(&self, _opts: ToStringOptions) -> ToStringResult<Cow<'_, str>> {
         Ok(Cow::Owned(
             self.credential
                 .get(Default::default())?
@@ -414,7 +408,7 @@ impl<C: CredentialProvider + Clone> UploadTokenProvider for FromUploadPolicy<C> 
     }
 }
 
-type OnPolicyGeneratedCallback<'a> = Arc<dyn Fn(&mut UploadPolicyBuilder) + Sync + Send + 'a>;
+type OnPolicyGeneratedCallback<'a> = Arc<dyn Fn(&mut UploadPolicyBuilder) -> AnyResult<()> + Sync + Send + 'a>;
 
 /// 基于存储空间的动态生成
 ///
@@ -449,14 +443,13 @@ impl<'a, C: Clone + 'a> BucketUploadTokenProvider<'a, C> {
         })
     }
 
-    fn make_policy(&self) -> UploadPolicy {
-        UploadPolicyBuilder::new_policy_for_bucket(self.bucket.to_string(), self.upload_token_lifetime)
-            .tap_mut(|policy| {
-                if let Some(on_policy_generated) = self.on_policy_generated.as_ref() {
-                    on_policy_generated(policy);
-                }
-            })
-            .build()
+    fn make_policy(&self) -> AnyResult<UploadPolicy> {
+        let mut builder =
+            UploadPolicyBuilder::new_policy_for_bucket(self.bucket.to_string(), self.upload_token_lifetime);
+        if let Some(on_policy_generated) = self.on_policy_generated.as_ref() {
+            on_policy_generated(&mut builder)?;
+        }
+        Ok(builder.build())
     }
 }
 
@@ -483,14 +476,14 @@ impl<'a, C: CredentialProvider + Clone + 'a> UploadTokenProvider for BucketUploa
     }
 
     fn policy(&self, _opts: GetPolicyOptions) -> ParseResult<GotUploadPolicy<'_>> {
-        Ok(self.make_policy().into())
+        Ok(self.make_policy()?.into())
     }
 
-    fn to_token_string(&self, _opts: ToStringOptions) -> IoResult<Cow<'_, str>> {
+    fn to_token_string(&self, _opts: ToStringOptions) -> ToStringResult<Cow<'_, str>> {
         Ok(Cow::Owned(
             self.credential
                 .get(Default::default())?
-                .sign_with_data(self.make_policy().as_json().as_bytes()),
+                .sign_with_data(self.make_policy()?.as_json().as_bytes()),
         ))
     }
 }
@@ -503,7 +496,10 @@ impl<'a, C: Clone + 'a> BucketUploadTokenProviderBuilder<'a, C> {
     /// 设置上传凭证回调函数
     #[inline]
     #[must_use]
-    pub fn on_policy_generated(mut self, callback: impl Fn(&mut UploadPolicyBuilder) + Sync + Send + 'a) -> Self {
+    pub fn on_policy_generated(
+        mut self,
+        callback: impl Fn(&mut UploadPolicyBuilder) -> AnyResult<()> + Sync + Send + 'a,
+    ) -> Self {
         self.0.on_policy_generated = Some(Arc::new(callback));
         self
     }
@@ -566,18 +562,16 @@ impl<'a, C: Clone + 'a> ObjectUploadTokenProvider<'a, C> {
         })
     }
 
-    fn make_policy(&self) -> UploadPolicy {
-        UploadPolicyBuilder::new_policy_for_object(
+    fn make_policy(&self) -> AnyResult<UploadPolicy> {
+        let mut builder = UploadPolicyBuilder::new_policy_for_object(
             self.bucket.to_string(),
             self.object.to_string(),
             self.upload_token_lifetime,
-        )
-        .tap_mut(|policy| {
-            if let Some(on_policy_generated) = self.on_policy_generated.as_ref() {
-                on_policy_generated(policy);
-            }
-        })
-        .build()
+        );
+        if let Some(on_policy_generated) = self.on_policy_generated.as_ref() {
+            on_policy_generated(&mut builder)?;
+        }
+        Ok(builder.build())
     }
 }
 
@@ -604,14 +598,14 @@ impl<'a, C: CredentialProvider + Clone + 'a> UploadTokenProvider for ObjectUploa
     }
 
     fn policy(&self, _opts: GetPolicyOptions) -> ParseResult<GotUploadPolicy<'_>> {
-        Ok(self.make_policy().into())
+        Ok(self.make_policy()?.into())
     }
 
-    fn to_token_string(&self, _opts: ToStringOptions) -> IoResult<Cow<'_, str>> {
+    fn to_token_string(&self, _opts: ToStringOptions) -> ToStringResult<Cow<'_, str>> {
         Ok(Cow::Owned(
             self.credential
                 .get(Default::default())?
-                .sign_with_data(self.make_policy().as_json().as_bytes()),
+                .sign_with_data(self.make_policy()?.as_json().as_bytes()),
         ))
     }
 }
@@ -624,7 +618,10 @@ impl<'a, C: Clone + 'a> ObjectUploadTokenProviderBuilder<'a, C> {
     /// 设置上传凭证回调函数
     #[inline]
     #[must_use]
-    pub fn on_policy_generated(mut self, callback: impl Fn(&mut UploadPolicyBuilder) + Sync + Send + 'a) -> Self {
+    pub fn on_policy_generated(
+        mut self,
+        callback: impl Fn(&mut UploadPolicyBuilder) -> AnyResult<()> + Sync + Send + 'a,
+    ) -> Self {
         self.0.on_policy_generated = Some(Arc::new(callback));
         self
     }
@@ -790,14 +787,14 @@ impl<P: UploadTokenProvider + Clone> UploadTokenProvider for CachedUploadTokenPr
         )
     }
 
-    fn to_token_string(&self, opts: ToStringOptions) -> IoResult<Cow<'_, str>> {
+    fn to_token_string(&self, opts: ToStringOptions) -> ToStringResult<Cow<'_, str>> {
         sync_method!(
             self,
             upload_token,
             opts,
             ToStringOptions,
             to_token_string,
-            IoResult<Cow<'a, str>>
+            ToStringResult<Cow<'a, str>>
         )
     }
 
@@ -815,7 +812,7 @@ impl<P: UploadTokenProvider + Clone> UploadTokenProvider for CachedUploadTokenPr
 
     #[cfg(feature = "async")]
     #[cfg_attr(feature = "docs", doc(cfg(feature = "async")))]
-    fn async_to_token_string(&self, opts: ToStringOptions) -> AsyncIoResult<'_, Cow<'_, str>> {
+    fn async_to_token_string(&self, opts: ToStringOptions) -> AsyncToStringResult<'_, Cow<'_, str>> {
         async_method!(self, upload_token, opts, async_to_token_string)
     }
 }
@@ -836,10 +833,34 @@ pub enum ParseError {
     /// 上传凭证获取认证信息错误
     #[error("Credential get error: {0}")]
     CredentialGetError(#[from] IoError),
+    /// `on_policy_generated` 回调函数错误
+    #[error("on_policy_generated callback error: {0}")]
+    CallbackError(#[from] AnyError),
 }
 
 /// 上传凭证解析结果
 pub type ParseResult<T> = Result<T, ParseError>;
+
+/// 生成上传凭证字符串错误
+#[derive(Error, Debug)]
+#[non_exhaustive]
+pub enum ToStringError {
+    /// 上传凭证获取认证信息错误
+    #[error("Credential get error: {0}")]
+    CredentialGetError(#[from] IoError),
+    /// 生成上传凭证回调函数错误
+    #[error("Generate Upload Policy Callback error: {0}")]
+    CallbackError(#[from] AnyError),
+}
+
+/// 生成上传凭证字符串结果
+pub type ToStringResult<T> = Result<T, ToStringError>;
+
+#[cfg(feature = "async")]
+type AsyncParseResult<'a, T> = Pin<Box<dyn Future<Output = ParseResult<T>> + 'a + Send>>;
+
+#[cfg(feature = "async")]
+type AsyncToStringResult<'a, T> = Pin<Box<dyn Future<Output = ToStringResult<T>> + 'a + Send>>;
 
 #[cfg(test)]
 mod tests {
@@ -868,6 +889,7 @@ mod tests {
         let provider = BucketUploadTokenProvider::builder("test_bucket", Duration::from_secs(3600), get_credential())
             .on_policy_generated(|policy| {
                 policy.return_body("{\"key\":$(key)}");
+                Ok(())
             })
             .build();
 

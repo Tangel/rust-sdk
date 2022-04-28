@@ -1,3 +1,4 @@
+use anyhow::Error as AnyError;
 use auto_impl::auto_impl;
 use dyn_clonable::clonable;
 use qiniu_credential::{Credential, CredentialProvider, GetOptions, Uri};
@@ -5,7 +6,7 @@ use qiniu_http::{
     header::{AUTHORIZATION, CONTENT_TYPE},
     HeaderValue, RequestParts, SyncRequest,
 };
-use qiniu_upload_token::UploadTokenProvider;
+use qiniu_upload_token::{ToStringError, UploadTokenProvider};
 use std::{fmt::Debug, io::Error as IoError, mem::take, result::Result, time::Duration};
 use tap::Tap;
 use thiserror::Error;
@@ -294,6 +295,10 @@ pub enum AuthorizationError {
     #[error("Get Upload Token or Credential error: {0}")]
     IoError(#[from] IoError),
 
+    /// 生成上传凭证回调函数错误
+    #[error("Generate Upload Policy Callback error: {0}")]
+    CallbackError(#[from] AnyError),
+
     /// URL 解析错误
     #[error("Parse URL error: {0}")]
     UrlParseError(#[from] UrlParseError),
@@ -301,6 +306,16 @@ pub enum AuthorizationError {
 
 /// 鉴权签名结果
 pub type AuthorizationResult<T> = Result<T, AuthorizationError>;
+
+impl From<ToStringError> for AuthorizationError {
+    fn from(err: ToStringError) -> Self {
+        match err {
+            ToStringError::CredentialGetError(err) => Self::IoError(err),
+            ToStringError::CallbackError(err) => Self::CallbackError(err),
+            err => unimplemented!("Unexpected ToStringError: {:?}", err),
+        }
+    }
+}
 
 /// 七牛鉴权签名
 ///
