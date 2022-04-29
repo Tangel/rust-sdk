@@ -1,4 +1,5 @@
 use super::{callbacks::Callbacks, Bucket};
+use anyhow::Error as AnyError;
 use assert_impl::assert_impl;
 use log::warn;
 use qiniu_apis::{
@@ -313,13 +314,13 @@ impl Iterator for ListIter<'_> {
             mut request: GetObjectsV1SyncRequestBuilder<'_, RefRegionProviderEndpoints>,
             callbacks: &mut Callbacks<'_>,
         ) -> ApiResult<Response<GetObjectsV1ResponseBody>> {
-            if callbacks.before_request(request.parts_mut()).is_cancelled() {
-                return Err(make_user_cancelled_error("Cancelled by before_request() callback"));
-            }
+            callbacks
+                .before_request(request.parts_mut())
+                .map_err(make_callback_error)?;
             let mut response_result = request.call();
-            if callbacks.after_response(&mut response_result).is_cancelled() {
-                return Err(make_user_cancelled_error("Cancelled by after_response() callback"));
-            }
+            callbacks
+                .after_response(&mut response_result)
+                .map_err(make_callback_error)?;
             response_result
         }
 
@@ -442,13 +443,13 @@ impl Iterator for ListIter<'_> {
             mut request: GetObjectsV2SyncRequestBuilder<'_, RefRegionProviderEndpoints>,
             callbacks: &mut Callbacks<'_>,
         ) -> ApiResult<Response<SyncResponseBody>> {
-            if callbacks.before_request(request.parts_mut()).is_cancelled() {
-                return Err(make_user_cancelled_error("Cancelled by before_request() callback"));
-            }
+            callbacks
+                .before_request(request.parts_mut())
+                .map_err(make_callback_error)?;
             let mut response_result = request.call();
-            if callbacks.after_response(&mut response_result).is_cancelled() {
-                return Err(make_user_cancelled_error("Cancelled by after_response() callback"));
-            }
+            callbacks
+                .after_response(&mut response_result)
+                .map_err(make_callback_error)?;
             response_result
         }
     }
@@ -639,16 +640,15 @@ mod async_list_stream {
                             .get_objects()
                             .new_async_request(RegionsProviderEndpoints::new(region_provider), credential);
                         request.query_pairs(self.params.to_query_params());
-                        if self.callbacks.before_request(request.parts_mut()).is_cancelled() {
+                        if let Err(err) = self.callbacks.before_request(request.parts_mut()) {
                             self.current_step = AsyncListV1Step::Done;
-                            return Poll::Ready(Some(Err(make_user_cancelled_error(
-                                "Cancelled by before_request() callback",
-                            ))));
+                            Poll::Ready(Some(Err(make_callback_error(err))))
+                        } else {
+                            self.current_step = AsyncListV1Step::WaitForResponse {
+                                task: Box::pin(async move { request.call().await }),
+                            };
+                            self.poll_next(cx)
                         }
-                        self.current_step = AsyncListV1Step::WaitForResponse {
-                            task: Box::pin(async move { request.call().await }),
-                        };
-                        self.poll_next(cx)
                     }
                     Err(err) => {
                         self.current_step = AsyncListV1Step::Done;
@@ -663,26 +663,25 @@ mod async_list_stream {
         fn wait_for_response(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<<Self as Stream>::Item>> {
             if let AsyncListV1Step::WaitForResponse { task } = &mut self.current_step {
                 let mut response_result = ready!(task.poll_unpin(cx));
-                if self.callbacks.after_response(&mut response_result).is_cancelled() {
+                if let Err(err) = self.callbacks.after_response(&mut response_result) {
                     self.current_step = AsyncListV1Step::Done;
-                    return Poll::Ready(Some(Err(make_user_cancelled_error(
-                        "Cancelled by after_response() callback",
-                    ))));
-                }
-                match response_result {
-                    Ok(response) => {
-                        let body = response.into_body();
-                        let listed_object_entries = body.get_items().to_listed_object_entry_vec();
-                        self.params.marker.set(body.get_marker_as_str());
-                        self.params.limit.saturating_decrease(listed_object_entries.len());
-                        self.current_step = AsyncListV1Step::FromBuffer {
-                            buffer: listed_object_entries.into(),
-                        };
-                        self.poll_next(cx)
-                    }
-                    Err(err) => {
-                        self.current_step = AsyncListV1Step::Done;
-                        Poll::Ready(Some(Err(err)))
+                    Poll::Ready(Some(Err(make_callback_error(err))))
+                } else {
+                    match response_result {
+                        Ok(response) => {
+                            let body = response.into_body();
+                            let listed_object_entries = body.get_items().to_listed_object_entry_vec();
+                            self.params.marker.set(body.get_marker_as_str());
+                            self.params.limit.saturating_decrease(listed_object_entries.len());
+                            self.current_step = AsyncListV1Step::FromBuffer {
+                                buffer: listed_object_entries.into(),
+                            };
+                            self.poll_next(cx)
+                        }
+                        Err(err) => {
+                            self.current_step = AsyncListV1Step::Done;
+                            Poll::Ready(Some(Err(err)))
+                        }
                     }
                 }
             } else {
@@ -783,16 +782,15 @@ mod async_list_stream {
                             .get_objects_v2()
                             .new_async_request(RegionsProviderEndpoints::new(region_provider), credential);
                         request.query_pairs(self.params.to_query_params());
-                        if self.callbacks.before_request(request.parts_mut()).is_cancelled() {
+                        if let Err(err) = self.callbacks.before_request(request.parts_mut()) {
                             self.current_step = AsyncListV2Step::Done;
-                            return Poll::Ready(Some(Err(make_user_cancelled_error(
-                                "Cancelled by after_response() callback",
-                            ))));
+                            Poll::Ready(Some(Err(make_callback_error(err))))
+                        } else {
+                            self.current_step = AsyncListV2Step::WaitForResponse {
+                                task: Box::pin(async move { request.call().await }),
+                            };
+                            self.poll_next(cx)
                         }
-                        self.current_step = AsyncListV2Step::WaitForResponse {
-                            task: Box::pin(async move { request.call().await }),
-                        };
-                        self.poll_next(cx)
                     }
                     Err(err) => {
                         self.current_step = AsyncListV2Step::Done;
@@ -807,22 +805,21 @@ mod async_list_stream {
         fn wait_for_response(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<<Self as Stream>::Item>> {
             if let AsyncListV2Step::WaitForResponse { task } = &mut self.current_step {
                 let mut response_result = ready!(task.poll_unpin(cx));
-                if self.callbacks.after_response(&mut response_result).is_cancelled() {
+                if let Err(err) = self.callbacks.after_response(&mut response_result) {
                     self.current_step = AsyncListV2Step::Done;
-                    return Poll::Ready(Some(Err(make_user_cancelled_error(
-                        "Cancelled by after_response() error",
-                    ))));
-                }
-                match response_result {
-                    Ok(response) => {
-                        self.current_step = AsyncListV2Step::WaitForEntries {
-                            lines: AsyncBufReader::new(response.into_body()).lines(),
-                        };
-                        self.poll_next(cx)
-                    }
-                    Err(err) => {
-                        self.current_step = AsyncListV2Step::Done;
-                        Poll::Ready(Some(Err(err)))
+                    Poll::Ready(Some(Err(make_callback_error(err))))
+                } else {
+                    match response_result {
+                        Ok(response) => {
+                            self.current_step = AsyncListV2Step::WaitForEntries {
+                                lines: AsyncBufReader::new(response.into_body()).lines(),
+                            };
+                            self.poll_next(cx)
+                        }
+                        Err(err) => {
+                            self.current_step = AsyncListV2Step::Done;
+                            Poll::Ready(Some(Err(err)))
+                        }
                     }
                 }
             } else {
@@ -865,8 +862,8 @@ mod async_list_stream {
     }
 }
 
-fn make_user_cancelled_error(message: &'static str) -> ResponseError {
-    ResponseError::new_with_msg(HttpResponseErrorKind::UserCanceled.into(), message)
+pub(super) fn make_callback_error(err: AnyError) -> ResponseError {
+    ResponseError::new_with_msg(HttpResponseErrorKind::CallbackError.into(), err)
 }
 
 #[cfg(feature = "async")]
@@ -875,12 +872,11 @@ pub use async_list_stream::*;
 #[cfg(test)]
 mod tests {
     use super::{super::ObjectsManager, *};
+    use anyhow::Error as AnyError;
     use qiniu_apis::{
         credential::Credential,
         http::{HeaderValue, HttpCaller, StatusCode, SyncRequest, SyncResponse, SyncResponseResult},
-        http_client::{
-            BucketName, CallbackResult, DirectChooser, HttpClient, NeverRetrier, Region, ResponseErrorKind, NO_BACKOFF,
-        },
+        http_client::{BucketName, DirectChooser, HttpClient, NeverRetrier, Region, ResponseErrorKind, NO_BACKOFF},
     };
     use serde_json::{json, to_string as json_to_string, to_vec as json_to_vec};
     use std::{
@@ -1075,21 +1071,21 @@ mod tests {
                 let before_request_callback_counter = before_request_callback_counter.to_owned();
                 move |_| {
                     before_request_callback_counter.fetch_add(1, Ordering::Relaxed);
-                    CallbackResult::Continue
+                    Ok(())
                 }
             })
             .after_response_ok_callback({
                 let after_response_ok_callback_counter = after_response_ok_callback_counter.to_owned();
                 move |_| {
                     after_response_ok_callback_counter.fetch_add(1, Ordering::Relaxed);
-                    CallbackResult::Continue
+                    Ok(())
                 }
             })
             .after_response_error_callback({
                 let after_response_error_callback_counter = after_response_error_callback_counter.to_owned();
                 move |_| {
                     after_response_error_callback_counter.fetch_add(1, Ordering::Relaxed);
-                    CallbackResult::Continue
+                    Ok(())
                 }
             })
             .iter();
@@ -1267,9 +1263,9 @@ mod tests {
             .version(ListVersion::V1)
             .before_request_callback(|_| {
                 if counter.load(Ordering::Relaxed) > 0 {
-                    CallbackResult::Cancel
+                    Err(AnyError::msg("Fake error"))
                 } else {
-                    CallbackResult::Continue
+                    Ok(())
                 }
             })
             .iter()
@@ -1284,7 +1280,7 @@ mod tests {
                 let err = entry.unwrap_err();
                 assert!(matches!(
                     err.kind(),
-                    ResponseErrorKind::HttpError(HttpResponseErrorKind::UserCanceled { .. })
+                    ResponseErrorKind::HttpError(HttpResponseErrorKind::CallbackError { .. })
                 ));
                 break;
             }
@@ -1496,21 +1492,21 @@ mod tests {
                 let before_request_callback_counter = before_request_callback_counter.to_owned();
                 move |_| {
                     before_request_callback_counter.fetch_add(1, Ordering::Relaxed);
-                    CallbackResult::Continue
+                    Ok(())
                 }
             })
             .after_response_ok_callback({
                 let after_response_ok_callback_counter = after_response_ok_callback_counter.to_owned();
                 move |_| {
                     after_response_ok_callback_counter.fetch_add(1, Ordering::Relaxed);
-                    CallbackResult::Continue
+                    Ok(())
                 }
             })
             .after_response_error_callback({
                 let after_response_error_callback_counter = after_response_error_callback_counter.to_owned();
                 move |_| {
                     after_response_error_callback_counter.fetch_add(1, Ordering::Relaxed);
-                    CallbackResult::Continue
+                    Ok(())
                 }
             })
             .iter();
@@ -1603,9 +1599,9 @@ mod tests {
             .version(ListVersion::V2)
             .before_request_callback(|_| {
                 if counter.load(Ordering::Relaxed) > 0 {
-                    CallbackResult::Cancel
+                    Err(AnyError::msg("Fake error"))
                 } else {
-                    CallbackResult::Continue
+                    Ok(())
                 }
             })
             .iter()
@@ -1620,7 +1616,7 @@ mod tests {
                 let err = entry.unwrap_err();
                 assert!(matches!(
                     err.kind(),
-                    ResponseErrorKind::HttpError(HttpResponseErrorKind::UserCanceled { .. })
+                    ResponseErrorKind::HttpError(HttpResponseErrorKind::CallbackError { .. })
                 ));
                 break;
             }
@@ -1809,21 +1805,21 @@ mod tests {
                 let before_request_callback_counter = before_request_callback_counter.to_owned();
                 move |_| {
                     before_request_callback_counter.fetch_add(1, Ordering::Relaxed);
-                    CallbackResult::Continue
+                    Ok(())
                 }
             })
             .after_response_ok_callback({
                 let after_response_ok_callback_counter = after_response_ok_callback_counter.to_owned();
                 move |_| {
                     after_response_ok_callback_counter.fetch_add(1, Ordering::Relaxed);
-                    CallbackResult::Continue
+                    Ok(())
                 }
             })
             .after_response_error_callback({
                 let after_response_error_callback_counter = after_response_error_callback_counter.to_owned();
                 move |_| {
                     after_response_error_callback_counter.fetch_add(1, Ordering::Relaxed);
-                    CallbackResult::Continue
+                    Ok(())
                 }
             })
             .stream();
@@ -2010,9 +2006,9 @@ mod tests {
                     let counter = counter.to_owned();
                     move |_| {
                         if counter.load(Ordering::Relaxed) > 0 {
-                            CallbackResult::Cancel
+                            Err(AnyError::msg("Fake error"))
                         } else {
-                            CallbackResult::Continue
+                            Ok(())
                         }
                     }
                 })
@@ -2028,7 +2024,7 @@ mod tests {
                     let err = entry.unwrap_err();
                     assert!(matches!(
                         err.kind(),
-                        ResponseErrorKind::HttpError(HttpResponseErrorKind::UserCanceled { .. })
+                        ResponseErrorKind::HttpError(HttpResponseErrorKind::CallbackError { .. })
                     ));
                     break;
                 }
@@ -2242,21 +2238,21 @@ mod tests {
                 let before_request_callback_counter = before_request_callback_counter.to_owned();
                 move |_| {
                     before_request_callback_counter.fetch_add(1, Ordering::Relaxed);
-                    CallbackResult::Continue
+                    Ok(())
                 }
             })
             .after_response_ok_callback({
                 let after_response_ok_callback_counter = after_response_ok_callback_counter.to_owned();
                 move |_| {
                     after_response_ok_callback_counter.fetch_add(1, Ordering::Relaxed);
-                    CallbackResult::Continue
+                    Ok(())
                 }
             })
             .after_response_error_callback({
                 let after_response_error_callback_counter = after_response_error_callback_counter.to_owned();
                 move |_| {
                     after_response_error_callback_counter.fetch_add(1, Ordering::Relaxed);
-                    CallbackResult::Continue
+                    Ok(())
                 }
             })
             .stream();
@@ -2355,9 +2351,9 @@ mod tests {
                     let counter = counter.to_owned();
                     move |_| {
                         if counter.load(Ordering::Relaxed) > 0 {
-                            CallbackResult::Cancel
+                            Err(AnyError::msg("Fake error"))
                         } else {
-                            CallbackResult::Continue
+                            Ok(())
                         }
                     }
                 })
@@ -2373,7 +2369,7 @@ mod tests {
                     let err = entry.unwrap_err();
                     assert!(matches!(
                         err.kind(),
-                        ResponseErrorKind::HttpError(HttpResponseErrorKind::UserCanceled { .. })
+                        ResponseErrorKind::HttpError(HttpResponseErrorKind::CallbackError { .. })
                     ));
                     break;
                 }
