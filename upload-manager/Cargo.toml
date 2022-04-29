@@ -15,7 +15,7 @@ keywords = ["qiniu", "storage"]
 
 [dependencies]
 log = "0.4.14"
-anyhow = "1.0.51"
+anyhow = "1.0.11"
 qiniu-apis = { version = "0.1.2", path = "../apis" }
 qiniu-upload-token = { version = "0.1.2", path = "../upload-token" }
 qiniu-utils = { version = "0.1.2", path = "../utils" }
