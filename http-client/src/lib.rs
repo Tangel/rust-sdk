@@ -335,17 +335,17 @@ pub use futures::io::AsyncRead;
 
 pub use client::{
     ApiResult, Authorization, AuthorizationError, AuthorizationProvider, AuthorizationResult, Backoff, BackoffOptions,
-    CachedResolver, CachedResolverBuilder, CallbackContext, ChainedResolver, ChainedResolverBuilder, ChooseOptions,
-    ChooseOptionsBuilder, Chooser, ChooserFeedback, ChosenResults, CredentialAuthorizationV1,
-    CredentialAuthorizationV2, DirectChooser, DownloadUrlCredentialAuthorization, ErrorRetrier, ExponentialBackoff,
-    ExtendedCallbackContext, FieldName, FileName, FixedBackoff, GotBackoffDuration, HttpClient, HttpClientBuilder,
-    Idempotent, IpChooser, IpChooserBuilder, LimitedBackoff, LimitedRetrier, Multipart, NeverEmptyHandedChooser,
-    NeverRetrier, Part, PartMetadata, QueryPair, QueryPairKey, QueryPairValue, RandomizedBackoff, Ratio,
-    RequestBuilder, RequestBuilderParts, RequestParts, RequestRetrier, RequestRetrierOptions, ResolveAnswers,
-    ResolveOptions, ResolveResult, Resolver, Response, ResponseError, ResponseErrorKind, RetriedStatsInfo,
-    RetryDecision, RetryResult, ShuffledChooser, ShuffledResolver, SimpleResolver, SimplifiedCallbackContext,
-    SubnetChooser, SubnetChooserBuilder, SyncMultipart, SyncPart, SyncPartBody, SyncRequestBody, SyncRequestBuilder,
-    SyncResponse, TimeoutResolver, UploadTokenAuthorization, NO_BACKOFF,
+    BackoffOptionsBuilder, CachedResolver, CachedResolverBuilder, CallbackContext, ChainedResolver,
+    ChainedResolverBuilder, ChooseOptions, ChooseOptionsBuilder, Chooser, ChooserFeedback, ChosenResults,
+    CredentialAuthorizationV1, CredentialAuthorizationV2, DirectChooser, DownloadUrlCredentialAuthorization,
+    ErrorRetrier, ExponentialBackoff, ExtendedCallbackContext, FieldName, FileName, FixedBackoff, GotBackoffDuration,
+    HttpClient, HttpClientBuilder, Idempotent, IpChooser, IpChooserBuilder, LimitedBackoff, LimitedRetrier, Multipart,
+    NeverEmptyHandedChooser, NeverRetrier, Part, PartMetadata, QueryPair, QueryPairKey, QueryPairValue,
+    RandomizedBackoff, Ratio, RequestBuilder, RequestBuilderParts, RequestParts, RequestRetrier, RequestRetrierOptions,
+    RequestRetrierOptionsBuilder, ResolveAnswers, ResolveOptions, ResolveResult, Resolver, Response, ResponseError,
+    ResponseErrorKind, RetriedStatsInfo, RetryDecision, RetryResult, ShuffledChooser, ShuffledResolver, SimpleResolver,
+    SimplifiedCallbackContext, SubnetChooser, SubnetChooserBuilder, SyncMultipart, SyncPart, SyncPartBody,
+    SyncRequestBody, SyncRequestBuilder, SyncResponse, TimeoutResolver, UploadTokenAuthorization, NO_BACKOFF,
 };
 pub use http::SyncResponseBody;
 pub use regions::{
