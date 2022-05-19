@@ -20,7 +20,7 @@ use std::{
 };
 
 #[cfg(feature = "async")]
-pub use futures::{AsyncRead, AsyncReadExt};
+use futures::{AsyncRead, AsyncReadExt};
 
 /// HTTP 响应错误类型
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
