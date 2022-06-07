@@ -14,6 +14,7 @@ use qiniu_apis::{
 use serde::{Deserialize, Serialize};
 use smart_default::SmartDefault;
 use std::{
+    borrow::Cow,
     collections::VecDeque,
     fmt::{self, Debug},
     io::{BufRead, BufReader, Lines},
@@ -28,7 +29,7 @@ type RefRegionProviderEndpoints<'a> = RegionsProviderEndpoints<&'a dyn RegionsPr
 #[derive(Debug, Clone)]
 struct ListParams<'a> {
     bucket: &'a Bucket,
-    prefix: Option<&'a str>,
+    prefix: Option<Cow<'a, str>>,
     limit: Limit,
     marker: Marker<'a>,
     need_parts: bool,
@@ -36,12 +37,12 @@ struct ListParams<'a> {
 
 #[derive(Debug, Clone)]
 enum Marker<'a> {
-    Original(Option<&'a str>),
+    Original(Option<Cow<'a, str>>),
     Subsequent(Option<String>),
 }
 
 impl<'a> Marker<'a> {
-    fn new(marker: Option<&'a str>) -> Self {
+    fn new(marker: Option<Cow<'a, str>>) -> Self {
         Self::Original(marker)
     }
 
@@ -108,8 +109,8 @@ impl<'a> ListParams<'a> {
         if let Some(limit) = self.limit.as_ref() {
             query_params = query_params.set_limit_as_usize(limit);
         }
-        if let Some(prefix) = self.prefix {
-            query_params = query_params.set_prefix_as_str(prefix);
+        if let Some(prefix) = self.prefix.as_ref() {
+            query_params = query_params.set_prefix_as_str(prefix.to_owned());
         }
         if self.need_parts {
             query_params = query_params.set_need_parts_as_bool(true);
@@ -214,8 +215,8 @@ impl<'a> ListIter<'a> {
     pub(super) fn new(
         bucket: &'a Bucket,
         limit: Option<usize>,
-        prefix: Option<&'a str>,
-        marker: Option<&'a str>,
+        prefix: Option<Cow<'a, str>>,
+        marker: Option<Cow<'a, str>>,
         need_parts: bool,
         version: ListVersion,
         callbacks: Callbacks<'a>,
@@ -526,8 +527,8 @@ mod async_list_stream {
         pub(in super::super) fn new(
             bucket: &'a Bucket,
             limit: Option<usize>,
-            prefix: Option<&'a str>,
-            marker: Option<&'a str>,
+            prefix: Option<Cow<'a, str>>,
+            marker: Option<Cow<'a, str>>,
             need_parts: bool,
             version: ListVersion,
             callbacks: Callbacks<'a>,
@@ -571,8 +572,8 @@ mod async_list_stream {
     fn v1_next<'a>(
         bucket: &'a Bucket,
         limit: Option<usize>,
-        prefix: Option<&'a str>,
-        marker: Option<&'a str>,
+        prefix: Option<Cow<'a, str>>,
+        marker: Option<Cow<'a, str>>,
         need_parts: bool,
         callbacks: Callbacks<'a>,
     ) -> ListedObjectEntryResultStream<'a> {
@@ -716,8 +717,8 @@ mod async_list_stream {
     fn v2_next<'a>(
         bucket: &'a Bucket,
         limit: Option<usize>,
-        prefix: Option<&'a str>,
-        marker: Option<&'a str>,
+        prefix: Option<Cow<'a, str>>,
+        marker: Option<Cow<'a, str>>,
         need_parts: bool,
         callbacks: Callbacks<'a>,
     ) -> ListedObjectEntryResultStream<'a> {
