@@ -59,9 +59,6 @@ pub enum ErrorKind {
 
     /// 用户取消
     UserCanceled,
-
-    /// 在 https_only 标志为真下执行非 HTTPS 请求
-    InsecureRequestHttpsOnly,
 }
 
 /// HTTP 响应错误
